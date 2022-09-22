@@ -12,11 +12,12 @@ def MessageBox (hWnd, lpText, lpCaption, uType):
 
 #   data converted to ctypes
     hWnd_ = ctypes.c_uint32 (hWnd)
-    lpText_ = ctypes.create_string_buffer (lpText)
-    lpCaption_ = ctypes.create_string_buffer (lpCaption)
+    lpText_ = ctypes.create_string_buffer (lpText.encode('utf-8'))
+    lpCaption_ = ctypes.create_string_buffer (lpCaption.encode('utf-8'))
     uType_ = ctypes.c_uint32 (uType)
     
     rc = MsgBoxApi (hWnd_, lpText_, lpCaption_, uType_) # actual call
     return rc
 
-# MessageBox(0, b"Stuff to display", b"Caption-y stuff", 0)
+# MessageBox(0, str("Stuff to display"), str("Caption-y stuff"), 0)
+# MessageBox(0, "Stuff to display", "Caption-y stuff", 0)

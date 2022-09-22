@@ -38,11 +38,13 @@ LStrHandle LVStr(char* str, int size)
     memmove((char*)(*l)->str, str, ((*l)->cnt = size));
     return l;
 }
+
 #endif //   LabVIEW stuff
 
 #if 1 // Python stuff
 static PyObject*sys = NULL, *io = NULL, *stringio = NULL, 
-                *stringioinstance = NULL, * module = NULL;
+                *stringioinstance = NULL, * MainModule = NULL;
+static bool IsPythonInit = false;
 int setup_stderr() {
     //PyObject* io = NULL, * stringio = NULL, * stringioinstance = NULL;
 
@@ -86,38 +88,43 @@ done:
 
     return result;
 }
+typedef struct {
+    int32_t dimSize;
+    uint32_t ptrVarObj[1];
+} PtrArray;
+typedef PtrArray** PtrArrayHdl;
 #endif  // end Python stuff
 
 #if 1 // PyVar methods
 PyVar::PyVar(VarObj* d) {   //  Python object from C++ Variant++
     addr = this;
     if (!IsVariant(d))
-        {errno = -1; errstr = new string("Invalid Variant++ object, use \"IsVariant()\" for details");}
+        {errnum = -1; errstr = new string("Invalid Variant++ object, use \"IsVariant()\" for details");}
     else {
         switch (d->data.index())
         {   //  good Variant++ object, create PyObject (numeric or string)
         case VarIdx::I32:
-            PyObj = PyLong_FromLong((long)get<int32_t>(d->data));
+            var = PyLong_FromLong((long)get<int32_t>(d->data));
             break;
         case VarIdx::DBL:
-            PyObj = PyFloat_FromDouble((double)get<double>(d->data));
+            var = PyFloat_FromDouble((double)get<double>(d->data));
             break;
         case VarIdx::Str:
-            PyObj = PyUnicode_FromString((char*)get<string*>(d->data)->c_str());
+            var = PyUnicode_FromString((char*)get<string*>(d->data)->c_str());
             break;
         default:
-            {errno = -1; errstr = new string("Unsupported data type"); errdata = new string(*d->name);}
+            {errnum = -1; errstr = new string("Unsupported data type"); errdata = new string(*d->name);}
             break;
         }
-        if (PyObj != NULL)
+        if (var != NULL)
         {   //  PyObject is valid, increment reference count, then set reference name
-            Py_INCREF(PyObj);
+            Py_INCREF(var);
             int rc;
-            if (sys == NULL) {errno = -1; errstr = new string("No Python \"sys\", couldn't set name");
+            if (sys == NULL) {errnum = -1; errstr = new string("No Python \"sys\", couldn't set name");
                               errdata = new string(*d->name); }
             else {
-                if ((rc = PyObject_SetAttrString(sys, d->name->c_str(), PyObj)) != 0) {
-                    errno = rc; errstr = new string("Couldn't set name using \"PyObject_SetAttrString()\"");
+                if ((rc = PyObject_SetAttrString(sys, d->name->c_str(), var)) != 0) {
+                    errnum = rc; errstr = new string("Couldn't set name using \"PyObject_SetAttrString()\"");
                     errdata = new string(*d->name);
                 }
                 else name = new string(*d->name);    //  set name/reference in object
@@ -130,7 +137,7 @@ PyVar::~PyVar() {
     delete errstr;  errstr  = NULL;
     delete errdata; errdata = NULL;
     delete name; name = NULL;
-    Py_DECREF(PyObj);
+    Py_DECREF(var);
 }
 
 bool PyVar::operator<  (const PyVar rhs) const { return addr <  rhs.addr; }
@@ -141,18 +148,18 @@ bool PyVar::operator== (const PyVar rhs) const { return addr == rhs.addr; }
 #if 1 // PyModule methods
 PyModule::PyModule(char* d) {   //  Python object from C++ Variant++
     addr = this;
-    PyObj = PyImport_AddModule(d);
-    if (PyObj != NULL)
+    module = PyImport_AddModule(d);
+    if (module != NULL)
     {   //  PyObject is valid, increment reference count, then set reference name
-        Py_INCREF(PyObj);
+        Py_INCREF(module);
         int rc;
         if (sys == NULL) {
-            errno = -1; errstr = new string("No Python \"sys\", couldn't set name");
+            errnum = -1; errstr = new string("No Python \"sys\", couldn't set name");
             errdata = new string(d);
         }
         else {
-            if ((rc = PyObject_SetAttrString(sys, d, PyObj)) != 0) {
-                errno = rc; errstr = new string("Couldn't set module name using \"PyObject_SetAttrString()\"");
+            if ((rc = PyObject_SetAttrString(sys, d, module)) != 0) {
+                errnum = rc; errstr = new string("Couldn't set module name using \"PyObject_SetAttrString()\"");
                 errdata = new string(d);
             }
             else name = new string(d);    //  set name/reference in object
@@ -164,7 +171,7 @@ PyModule::~PyModule() {
     delete errstr;  errstr = NULL;
     delete errdata; errdata = NULL;
     delete name; name = NULL;
-    Py_DECREF(PyObj);
+    Py_DECREF(module);
 }
 
 bool PyModule::operator<  (const PyModule rhs) const { return addr < rhs.addr; }
@@ -172,37 +179,49 @@ bool PyModule::operator<= (const PyModule rhs) const { return addr <= rhs.addr; 
 bool PyModule::operator== (const PyModule rhs) const { return addr == rhs.addr; }
 #endif // PyModule methods
 
-static std::list<PyModule*> PyModObjs;  //  Python objects, mudules...
 static std::list<PyVar*> PyVarObjs;     //  Python variables, numeric and string
+static std::list<PyObject*> PyObjObjs;     //  Python variables, numeric and string
 MSEXPORT void AddToPyList(PyVar* V) { PyVarObjs.push_back(V); }
-MSEXPORT void AddToPyMods(PyModule* V) { PyModObjs.push_back(V); }
+MSEXPORT void AddToPyObjects(PyObject* V) { PyObjObjs.push_back(V); }
 
 struct {bool err = false; string* str = NULL;} ObjErr; //  where we store user-checked/non-API error info
 
 bool IsPyVar(PyVar* addr) //  check for corruption/validity, use <list> to track all open control/monitor objects, avoid SEGFAULT
 {
     if (addr == NULL) 
-        {ObjErr.str = new string("NULL Python Object"); ObjErr.err = true; return false; }
+        {ObjErr.str = new string("NULL Python variable"); ObjErr.err = true; return false; }
     bool b = false;
     for (auto i : PyVarObjs) { if (i->addr == addr) {b = true; break;}}
     if (!b) 
-        {ObjErr.str = new string("Invalid Python object (unallocated memory or non-control reference)"); ObjErr.err = true; return false; }
+        {ObjErr.str = new string("Invalid Python variable (unallocated memory or non-Python object)"); ObjErr.err = true; return false; }
 
     if (addr->addr == addr && addr->canary_end == MAGIC)
         { ObjErr.err = false; delete ObjErr.str; return true; }
     else { ObjErr.err = true; ObjErr.str = new string("Control/monitor memory corrupted"); return false; }
 }
 
+bool IsPyObj(PyObject* addr) //  check for validity, use <list> to track all Python objects, avoid SEGFAULT
+{
+    if (addr == NULL)
+        {ObjErr.str = new string("NULL Python Object"); ObjErr.err = true; return false;}
+    bool b = false;
+    for (auto i : PyObjObjs) { if (i == addr) { b = true; break; } }
+    if (b) return true;
+    else
+        {ObjErr.str = new string("Invalid Python object (unallocated memory or non-Python object)"); ObjErr.err = true; return false;}
+}
+
 extern "C" {  //  functions to be called from LabVIEW.  'extern "C"' is necessary to prevent overload name mangling
 
 #define LStrString(A) string((char*) (*A)->str, (*A)->cnt)
 MSEXPORT int PyInit() { //  initialize Python interpreter
-    if (sys == NULL)
+    if (!IsPythonInit)
     {
         Py_Initialize();
+        MainModule = PyImport_AddModule("__main__");
         sys = PyImport_AddModule("sys");
-        module = PyImport_AddModule("__main__");
         if (setup_stderr() == 0) return -1;
+        IsPythonInit = MainModule != NULL;
     }
     return 0;
 }
@@ -220,8 +239,27 @@ MSEXPORT int PyRun(LStrHandle cmd, tLvVarErr* error) {  //  run simple Python pr
     return rc;
 }
 
-MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {
-    if (sys == NULL)    //  no place to set the name attribute
+#define DICT_ERR(e, rc) {error->errnum = -1; error->errstr = LVStr(e); return rc;}
+MSEXPORT int PyRunVars(LStrHandle cmd, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run simple Python program (no parameter exchange)
+    int rc = -1;
+    if (globals != NULL) if (!IsPyObj(globals)) DICT_ERR("bad/invalid global dictionary", -1);
+    if (locals  != NULL) if (!IsPyObj(locals))  DICT_ERR("bad/invalid locals dictionary", -1);
+    if (IsPythonInit) rc = PyRun_SimpleString(LStrString(cmd).c_str());
+    else { error->errnum = -1;  error->errstr = LVStr("Python not initialized"); return -1;}
+
+    if (rc)
+    {
+        error->errnum = rc;
+        if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
+        LStrHandle errstr = get_stderr_text();
+        if (errstr != NULL) error->errstr = errstr;
+        else error->errstr = LVStr("Unknown error");
+    }
+    return rc;
+}
+
+MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Python variable object
+    if (!IsPythonInit)    //  no place to set the name attribute
         {ObjErr.err = true; ObjErr.str = new string("Python interpreter not initialized"); return NULL;}   
     if (!IsVariant(data)) { //  check for valid Variant, on error, get object error
         tObjErr* VarErr = (tObjErr*) GetObjErr();
@@ -239,33 +277,37 @@ MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {
     return pValue;
 }
 
-MSEXPORT PyModule* PyModCreate(char* data, tLvVarErr* error) {
-    if (sys == NULL)    //  no place to set the name attribute
-        {error->errnum = -1; error->errstr = LVStr("Python interpreter not initialized"); return NULL;}
-    if (strlen(data) == 0) { //  check for valid name
-        error->errnum = -1; error->errstr = LVStr("module name may not be blank"); return NULL;}
+MSEXPORT int PyVarDelete(PyVar* var) { //  delete LV Python variable object
+    if (!IsPyVar(var)) return -1;  //  don't want to risk a dump in case of invalid data
+    PyVarObjs.remove(var); delete var;
+    return 0;
+}
 
-    PyModule* pValue = new PyModule(data);
-    if (pValue->errnum) {
-        error->errnum = pValue->errnum;
-        if (pValue->errdata != NULL) error->errdata = LVStr(*(pValue->errdata));
-        if (pValue->errstr != NULL) error->errstr = LVStr(*(pValue->errstr));
-        else error->errstr = LVStr("Unknown error");
+MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, tLvVarErr* error) {  //  create Python dictionary
+    //  NOTE:  This is the means to transfer in/out between Python variables and C++ variant objects
+    if ((*PyObjects)->dimSize == 0) return NULL;
+    PyObject* pValue = PyDict_New();
+    if (pValue == NULL) DICT_ERR("Couldn't create Python dictionary", NULL);
+    for (size_t i = 0; i < (*PyObjects)->dimSize; i++)
+    {
+        PyVar* it = (PyVar *) (*PyObjects)->ptrVarObj[i];
+        if (PyDict_SetItemString(pValue, it->name->c_str(), it->var))
+            {error->errdata = LVStr(*it->name); DICT_ERR("Couldn't add Python dictionary item", NULL);}
     }
-    else AddToPyMods(pValue);   //  SUCCESS, add to list to track.
+    AddToPyObjects(pValue);   //  SUCCESS, add to list to track.
     return pValue;
 }
 
-MSEXPORT int PyVarDestroy(PyVar* var) {
-    if (!IsPyVar(var)) return -1;  //  don't want to risk a dump in case of invalid data
-    else delete var;
+MSEXPORT int PyDictDelete(PyObject* dict) { //  delete Python dictionary object
+    if (!IsPyObj(dict)) return -1;  //  don't want to risk a dump in case of invalid data
+    PyObjObjs.remove(dict); delete dict;
     return 0;
 }
 
 #if 1   //  utility-ish functions
 
-MSEXPORT void GetError(PyVar* CtrlObj, tLvVarErr* error) { //  get error info
-    if (CtrlObj == NULL || ObjErr.err) { //  NULL object, or error in object creation
+MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
+    if (PyVarObj == NULL || ObjErr.err) { //  NULL object, or error in object creation
         if (!ObjErr.err) return; //  no error
         error->errnum = -1;
         error->errstr = LVStr(*ObjErr.str);
@@ -273,13 +315,13 @@ MSEXPORT void GetError(PyVar* CtrlObj, tLvVarErr* error) { //  get error info
     }
     else
     {   //  API error info is stored in object, pass up to caller
-        error->errnum = CtrlObj->errnum;
-        if (CtrlObj->errdata != NULL) error->errdata = LVStr(*(CtrlObj->errdata));
-        if (CtrlObj->errstr != NULL) error->errstr = LVStr(*(CtrlObj->errstr));
+        error->errnum = PyVarObj->errnum;
+        if (PyVarObj->errdata != NULL) error->errdata = LVStr(*(PyVarObj->errdata));
+        if (PyVarObj->errstr != NULL) error->errstr = LVStr(*(PyVarObj->errstr));
         else error->errstr = LVStr("Unknown error");
-        CtrlObj->errnum = 0;
-        delete CtrlObj->errstr;  CtrlObj->errstr  = NULL;
-        delete CtrlObj->errdata; CtrlObj->errdata = NULL;
+        PyVarObj->errnum = 0;
+        delete PyVarObj->errstr;  PyVarObj->errstr  = NULL;
+        delete PyVarObj->errdata; PyVarObj->errdata = NULL;
     }
 }
 

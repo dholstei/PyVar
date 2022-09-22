@@ -16,32 +16,13 @@
 
 #define MAGIC 0x13131313    //  random, unique, non 0x00000000 and 0xffffffff number
 #define VARTYPE int, double, string*, uint8_t*, bool
-
-class PyVar
-{
-public:
-    void* addr;
-    PyObject* PyObj = NULL;
-    string* name = NULL;
-    int errnum = 0; string* errstr = NULL, * errdata = NULL;
-
-    PyVar(VarObj* d);
-    ~PyVar();
-
-
-    bool operator<  (const PyVar rhs) const;
-    bool operator<= (const PyVar rhs) const;
-    bool operator== (const PyVar rhs) const;
-    uint32_t canary_end = MAGIC;  //  check for buffer overrun/corruption
-private:
-
-};
+enum VarIdx :int { U8 = 1, I32 = 4, U32 = 5, DBL = 7, Str = 8 };
 
 class PyModule
 {
 public:
     void* addr;
-    PyObject* PyObj = NULL;
+    PyObject* module = NULL;
     string* name = NULL;
     int errnum = 0; string* errstr = NULL, * errdata = NULL;
 
@@ -57,4 +38,23 @@ private:
 
 };
 
-enum VarIdx :int { U8 = 1, I32 = 4, U32 = 5, DBL = 7, Str = 8 };
+class PyVar
+{
+public:
+    void* addr;
+    PyModule* module = NULL;
+    PyObject* var = NULL;
+    string* name = NULL;
+    int errnum = 0; string* errstr = NULL, * errdata = NULL;
+
+    PyVar(VarObj* d);
+    ~PyVar();
+
+
+    bool operator<  (const PyVar rhs) const;
+    bool operator<= (const PyVar rhs) const;
+    bool operator== (const PyVar rhs) const;
+    uint32_t canary_end = MAGIC;  //  check for buffer overrun/corruption
+private:
+
+};

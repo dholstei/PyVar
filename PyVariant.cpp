@@ -145,7 +145,7 @@ bool PyVar::operator<= (const PyVar rhs) const { return addr <= rhs.addr; }
 bool PyVar::operator== (const PyVar rhs) const { return addr == rhs.addr; }
 #endif // PyVar methods
 
-#if 1 // PyModule methods
+#if 0 // PyModule methods
 PyModule::PyModule(char* d) {   //  Python object from C++ Variant++
     addr = this;
     module = PyImport_AddModule(d);
@@ -226,44 +226,33 @@ MSEXPORT int PyInit() { //  initialize Python interpreter
     return 0;
 }
 
-MSEXPORT int PyRun(LStrHandle cmd, tLvVarErr* error) {  //  run simple Python program (no parameter exchange)
-    int rc = PyRun_SimpleString(LStrString(cmd).c_str());
-    if (rc)
-    {
-        error->errnum = rc;
+#define DICT_ERR(e) {error->errnum = -1; error->errstr = LVStr(e); return NULL;}
+MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run Python program
+    PyObject* rtn = NULL;
+    if (globals != NULL) if (!IsPyObj(globals)) DICT_ERR("bad/invalid global dictionary");
+    if (locals  != NULL) if (!IsPyObj(locals))  DICT_ERR("bad/invalid locals dictionary");
+    if (IsPythonInit) rtn = PyRun_String(LStrString(cmd).c_str(), start, globals, locals);
+    else { error->errnum = -1;  error->errstr = LVStr("Python not initialized"); return NULL;}
+
+    if (rtn == NULL)
+    {   //  this is the error condition, return value is NULL
+        error->errnum = -1;
         if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
         LStrHandle errstr = get_stderr_text();
         if (errstr != NULL) error->errstr = errstr;
         else error->errstr = LVStr("Unknown error");
     }
-    return rc;
-}
-
-#define DICT_ERR(e, rc) {error->errnum = -1; error->errstr = LVStr(e); return rc;}
-MSEXPORT int PyRunVars(LStrHandle cmd, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run simple Python program (no parameter exchange)
-    int rc = -1;
-    if (globals != NULL) if (!IsPyObj(globals)) DICT_ERR("bad/invalid global dictionary", -1);
-    if (locals  != NULL) if (!IsPyObj(locals))  DICT_ERR("bad/invalid locals dictionary", -1);
-    if (IsPythonInit) rc = PyRun_SimpleString(LStrString(cmd).c_str());
-    else { error->errnum = -1;  error->errstr = LVStr("Python not initialized"); return -1;}
-
-    if (rc)
-    {
-        error->errnum = rc;
-        if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
-        LStrHandle errstr = get_stderr_text();
-        if (errstr != NULL) error->errstr = errstr;
-        else error->errstr = LVStr("Unknown error");
-    }
-    return rc;
+    return rtn;
 }
 
 MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Python variable object
     if (!IsPythonInit)    //  no place to set the name attribute
         {ObjErr.err = true; ObjErr.str = new string("Python interpreter not initialized"); return NULL;}   
     if (!IsVariant(data)) { //  check for valid Variant, on error, get object error
-        tObjErr* VarErr = (tObjErr*) GetObjErr();
-        ObjErr.err = VarErr->err; ObjErr.str = VarErr->str;
+        tObjErr* VarErr = (tObjErr*) GetObjErr();   //  get error from Variant library
+        error->errnum = VarErr->err; VarErr->err = 0;
+        if (VarErr->str != NULL)
+            {error->errstr = LVStr(*VarErr->str); delete VarErr->str; VarErr->str = NULL;}
         return NULL;}
 
     PyVar *pValue =  new PyVar(data);
@@ -287,12 +276,12 @@ MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, tLvVarErr* error) {  //  
     //  NOTE:  This is the means to transfer in/out between Python variables and C++ variant objects
     if ((*PyObjects)->dimSize == 0) return NULL;
     PyObject* pValue = PyDict_New();
-    if (pValue == NULL) DICT_ERR("Couldn't create Python dictionary", NULL);
+    if (pValue == NULL) DICT_ERR("Couldn't create Python dictionary");
     for (size_t i = 0; i < (*PyObjects)->dimSize; i++)
     {
         PyVar* it = (PyVar *) (*PyObjects)->ptrVarObj[i];
         if (PyDict_SetItemString(pValue, it->name->c_str(), it->var))
-            {error->errdata = LVStr(*it->name); DICT_ERR("Couldn't add Python dictionary item", NULL);}
+            {error->errdata = LVStr(*it->name); DICT_ERR("Couldn't add Python dictionary item");}
     }
     AddToPyObjects(pValue);   //  SUCCESS, add to list to track.
     return pValue;

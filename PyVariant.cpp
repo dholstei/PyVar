@@ -119,16 +119,7 @@ PyVar::PyVar(VarObj* d) {   //  Python object from C++ Variant++
         if (var != NULL)
         {   //  PyObject is valid, increment reference count, then set reference name
             Py_INCREF(var);
-            int rc;
-            if (sys == NULL) {errnum = -1; errstr = new string("No Python \"sys\", couldn't set name");
-                              errdata = new string(*d->name); }
-            else {
-                if ((rc = PyObject_SetAttrString(sys, d->name->c_str(), var)) != 0) {
-                    errnum = rc; errstr = new string("Couldn't set name using \"PyObject_SetAttrString()\"");
-                    errdata = new string(*d->name);
-                }
-                else name = new string(*d->name);    //  set name/reference in object
-            }
+            name = new string(*d->name);    //  set name/reference in object
         }
     }
 }
@@ -218,10 +209,8 @@ MSEXPORT int PyInit() { //  initialize Python interpreter
     if (!IsPythonInit)
     {
         Py_Initialize();
-        MainModule = PyImport_AddModule("__main__");
-        sys = PyImport_AddModule("sys");
         if (setup_stderr() == 0) return -1;
-        IsPythonInit = MainModule != NULL;
+        IsPythonInit = true;
     }
     return 0;
 }

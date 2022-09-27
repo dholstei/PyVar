@@ -1,6 +1,8 @@
 #pragma once
 
 #ifdef WIN32
+#include<Windows.h>
+#include <winuser.h>
 #define MSEXPORT __declspec(dllexport)
 #else
 #define MSEXPORT
@@ -18,6 +20,7 @@
 #define VARTYPE int, double, string*, uint8_t*, bool
 enum VarIdx :int { U8 = 1, I32 = 4, U32 = 5, DBL = 7, Str = 8 };
 
+#if 0
 class PyModule
 {
 public:
@@ -37,12 +40,12 @@ public:
 private:
 
 };
+#endif
 
 class PyVar
 {
 public:
     void* addr;
-    PyModule* module = NULL;
     PyObject* var = NULL;
     string* name = NULL;
     int errnum = 0; string* errstr = NULL, * errdata = NULL;

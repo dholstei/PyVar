@@ -7,7 +7,7 @@
 //
 #define		PYVAR_VERSION "PyVariant++-0.0"
 
-#define PY_SSIZE_T_CLEAN
+//#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "extcode.h"
 
@@ -46,7 +46,7 @@ static PyObject*sys = NULL, *io = NULL, *stringio = NULL,
                 *stringioinstance = NULL, * MainModule = NULL;
 static bool IsPythonInit = false;
 int setup_stderr() {
-    //PyObject* io = NULL, * stringio = NULL, * stringioinstance = NULL;
+    PyObject* io = NULL, * stringio = NULL, * stringioinstance = NULL;
 
     int success = 0;
 
@@ -62,8 +62,12 @@ int setup_stderr() {
     success = 1;
 
 done:
+    Py_XDECREF(stringioinstance);
+    Py_XDECREF(stringio);
+    Py_XDECREF(io);
     return success;
 }
+
 LStrHandle get_stderr_text() {
     PyObject* pystderr = PySys_GetObject("stderr"); // borrowed reference
 
@@ -85,7 +89,10 @@ LStrHandle get_stderr_text() {
     result = LVStr((char*) temp_result, size);
 
 done:
-
+    Py_XDECREF(encoded);
+    Py_XDECREF(value);
+    PyErr_Clear();
+    MessageBoxA(0, temp_result, "error", 0);
     return result;
 }
 typedef struct {
@@ -96,7 +103,7 @@ typedef PtrArray** PtrArrayHdl;
 #endif  // end Python stuff
 
 #if 1 // PyVar methods
-PyVar::PyVar(VarObj* d) {   //  Python object from C++ Variant++
+PyVar::PyVar(VarObj* d) {   //  Python variable object from C++ Variant++
     addr = this;
     if (!IsVariant(d))
         {errnum = -1; errstr = new string("Invalid Variant++ object, use \"IsVariant()\" for details");}
@@ -119,7 +126,7 @@ PyVar::PyVar(VarObj* d) {   //  Python object from C++ Variant++
         if (var != NULL)
         {   //  PyObject is valid, increment reference count, then set reference name
             Py_INCREF(var);
-            name = new string(*d->name);    //  set name/reference in object
+            name = new string(d->name->c_str());    //  set name/reference in object
         }
     }
 }
@@ -175,7 +182,7 @@ static std::list<PyObject*> PyObjObjs;     //  Python variables, numeric and str
 MSEXPORT void AddToPyList(PyVar* V) { PyVarObjs.push_back(V); }
 MSEXPORT void AddToPyObjects(PyObject* V) { PyObjObjs.push_back(V); }
 
-struct {bool err = false; string* str = NULL;} ObjErr; //  where we store user-checked/non-API error info
+static struct {bool err = false; string* str = NULL;} ObjErr; //  where we store user-checked/non-API error info
 
 bool IsPyVar(PyVar* addr) //  check for corruption/validity, use <list> to track all open control/monitor objects, avoid SEGFAULT
 {
@@ -206,28 +213,31 @@ extern "C" {  //  functions to be called from LabVIEW.  'extern "C"' is necessar
 
 #define LStrString(A) string((char*) (*A)->str, (*A)->cnt)
 MSEXPORT int PyInit() { //  initialize Python interpreter
-    if (!IsPythonInit)
+    if (!Py_IsInitialized())
     {
-        Py_Initialize();
+        Py_InitializeEx(0);
         if (setup_stderr() == 0) return -1;
-        IsPythonInit = true;
     }
     return 0;
 }
 
 #define DICT_ERR(e) {error->errnum = -1; error->errstr = LVStr(e); return NULL;}
 MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run Python program
-    PyObject* rtn = NULL;
+    PyObject* rtn = NULL; int rc = 0;
     if (globals != NULL) if (!IsPyObj(globals)) DICT_ERR("bad/invalid global dictionary");
     if (locals  != NULL) if (!IsPyObj(locals))  DICT_ERR("bad/invalid locals dictionary");
-    if (IsPythonInit) rtn = PyRun_String(LStrString(cmd).c_str(), start, globals, locals);
+    //MainModule = PyImport_AddModule("__main__"); Py_INCREF(MainModule);
+    if (Py_IsInitialized())
+        if (globals == NULL && locals == NULL) rc = PyRun_SimpleString(LStrString(cmd).c_str());
+        else {rtn = PyRun_String(LStrString(cmd).c_str(), start, globals, locals);}
     else { error->errnum = -1;  error->errstr = LVStr("Python not initialized"); return NULL;}
 
-    if (rtn == NULL)
+    if (rtn == NULL || rc != 0)
     {   //  this is the error condition, return value is NULL
+        PyErr_Print();
         error->errnum = -1;
-        if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
         LStrHandle errstr = get_stderr_text();
+        if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
         if (errstr != NULL) error->errstr = errstr;
         else error->errstr = LVStr("Unknown error");
     }
@@ -235,7 +245,7 @@ MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject*
 }
 
 MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Python variable object
-    if (!IsPythonInit)    //  no place to set the name attribute
+    if (!Py_IsInitialized())    //  no place to set the name attribute
         {ObjErr.err = true; ObjErr.str = new string("Python interpreter not initialized"); return NULL;}   
     if (!IsVariant(data)) { //  check for valid Variant, on error, get object error
         tObjErr* VarErr = (tObjErr*) GetObjErr();   //  get error from Variant library
@@ -261,10 +271,16 @@ MSEXPORT int PyVarDelete(PyVar* var) { //  delete LV Python variable object
     return 0;
 }
 
-MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, tLvVarErr* error) {  //  create Python dictionary
-    //  NOTE:  This is the means to transfer in/out between Python variables and C++ variant objects
+MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, PyObject* m, tLvVarErr* error) {  //  create Python dictionary
+    //  NOTE:   This is the means to transfer in/out between Python variables and C++ variant objects
+    //          Add items to mudule if not NULL
+    if (!Py_IsInitialized())
+        {ObjErr.err = true; ObjErr.str = new string("Python interpreter not initialized"); return NULL;}
     if ((*PyObjects)->dimSize == 0) return NULL;
-    PyObject* pValue = PyDict_New();
+    PyObject* pValue;
+    if (m == NULL) pValue = PyDict_New();
+    else pValue = PyModule_GetDict(m);
+
     if (pValue == NULL) DICT_ERR("Couldn't create Python dictionary");
     for (size_t i = 0; i < (*PyObjects)->dimSize; i++)
     {

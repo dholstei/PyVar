@@ -216,6 +216,8 @@ MSEXPORT int PyInit() { //  initialize Python interpreter
     if (!Py_IsInitialized())
     {
         Py_InitializeEx(0);
+        sys = PyImport_ImportModule("sys");
+        //MainModule = PyImport_ImportModule("__main__");
         if (setup_stderr() == 0) return -1;
     }
     return 0;
@@ -296,6 +298,21 @@ MSEXPORT int PyDictDelete(PyObject* dict) { //  delete Python dictionary object
     if (!IsPyObj(dict)) return -1;  //  don't want to risk a dump in case of invalid data
     PyObjObjs.remove(dict); delete dict;
     return 0;
+}
+
+MSEXPORT VarObj* PyVarToVarPP(char* name, PyObject* var) {  //  convert Python variable object to Variant++ (C++) object
+    if (!IsPyObj(var)) return NULL;  //  don't want to risk a dump in case of invalid data
+    VarObj* V = NULL;
+    string* type = new string(var->ob_type->tp_name);
+    bool err = false;
+    if (*type == string("int")){
+        PyObject* ErrObj = NULL;    //  so we may parse the error later
+        int32_t val = PyLong_AsLong(var);
+        if (val == -1) err = (ErrObj = PyErr_Occurred()) != NULL;
+        if (!err) return (V = new VarObj(string(name), val));
+        else {ObjErr.err = true; ObjErr.str = new string("Couldn't convert integer"); return NULL; }
+        }
+
 }
 
 #if 1   //  utility-ish functions

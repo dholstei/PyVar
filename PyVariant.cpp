@@ -24,19 +24,27 @@ LStrHandle LVStr(string str)    //  convert string to new LV string handle
     memmove((char*)(*l)->str, str.c_str(), ((*l)->cnt = str.length()));
     return l;
 }
-LStrHandle LVStr(string str, int size)
+LStrHandle  LVStr(string str, int size)
 {
     if (size == 0) return NULL;
     LStrHandle l; if ((l = (LStrHandle)DSNewHClr(sizeof(int32) + size)) == NULL) return NULL;
     memmove((char*)(*l)->str, str.c_str(), ((*l)->cnt = size));
     return l;
 }
-LStrHandle LVStr(char* str, int size)
+LStrHandle  LVStr(char* str, int size)
 {
     if (size == 0) return NULL;
     LStrHandle l; if ((l = (LStrHandle)DSNewHClr(sizeof(int32) + size)) == NULL) return NULL;
     memmove((char*)(*l)->str, str, ((*l)->cnt = size));
     return l;
+}
+void        LVStr(LStrHandle loc, string* str)    //  convert string to new LV string handle
+{
+    if (str == NULL)
+        {DSSetHandleSize(loc, sizeof(int32)); (*loc)->cnt = 0;}
+    else
+       {DSSetHandleSize(loc, sizeof(int32) + str == NULL ? 0 : str->length());
+        memmove((char*)(*loc)->str, str->c_str(), ((*loc)->cnt = str->length()));}
 }
 
 #endif //   LabVIEW stuff
@@ -110,10 +118,10 @@ PyVar::PyVar(VarObj* d) {   //  Python variable object from C++ Variant++
     else {
         switch (d->data.index())
         {   //  good Variant++ object, create PyObject (numeric or string)
-        case VarIdx::I32:
+        case VarIdx::I32:   //  Python isn't strongly typed, I believe 8/16 bit is a relic so won't support it
             var = PyLong_FromLong((long)get<int32_t>(d->data));
             break;
-        case VarIdx::DBL:
+        case VarIdx::DBL:   //  Easier to support double only, will ignore single precision
             var = PyFloat_FromDouble((double)get<double>(d->data));
             break;
         case VarIdx::Str:
@@ -126,7 +134,8 @@ PyVar::PyVar(VarObj* d) {   //  Python variable object from C++ Variant++
         if (var != NULL)
         {   //  PyObject is valid, increment reference count, then set reference name
             Py_INCREF(var);
-            name = new string(d->name->c_str());    //  set name/reference in object
+            if (d->name != NULL)
+                name = new string(d->name->c_str());    //  set name/reference in object
         }
     }
 }
@@ -198,7 +207,7 @@ bool IsPyVar(PyVar* addr) //  check for corruption/validity, use <list> to track
     else { ObjErr.err = true; ObjErr.str = new string("Control/monitor memory corrupted"); return false; }
 }
 
-bool IsPyObj(PyObject* addr) //  check for validity, use <list> to track all Python objects, avoid SEGFAULT
+bool IsPyObject(PyObject* addr) //  check for validity, use <list> to track all Python objects, avoid SEGFAULT
 {
     if (addr == NULL)
         {ObjErr.str = new string("NULL Python Object"); ObjErr.err = true; return false;}
@@ -226,8 +235,8 @@ MSEXPORT int PyInit() { //  initialize Python interpreter
 #define DICT_ERR(e) {error->errnum = -1; error->errstr = LVStr(e); return NULL;}
 MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run Python program
     PyObject* rtn = NULL; int rc = 0;
-    if (globals != NULL) if (!IsPyObj(globals)) DICT_ERR("bad/invalid global dictionary");
-    if (locals  != NULL) if (!IsPyObj(locals))  DICT_ERR("bad/invalid locals dictionary");
+    if (globals != NULL) if (!IsPyObject(globals)) DICT_ERR("bad/invalid global dictionary");
+    if (locals  != NULL) if (!IsPyObject(locals))  DICT_ERR("bad/invalid locals dictionary");
     //MainModule = PyImport_AddModule("__main__"); Py_INCREF(MainModule);
     if (Py_IsInitialized())
         if (globals == NULL && locals == NULL) rc = PyRun_SimpleString(LStrString(cmd).c_str());
@@ -267,6 +276,10 @@ MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Pytho
     return pValue;
 }
 
+MSEXPORT PyObject* GetPyObject(PyVar* var) {return var->var;}
+
+MSEXPORT void GetPyVarName(LStrHandle name, PyVar* var)  {LVStr(name, var->name);}
+
 MSEXPORT int PyVarDelete(PyVar* var) { //  delete LV Python variable object
     if (!IsPyVar(var)) return -1;  //  don't want to risk a dump in case of invalid data
     PyVarObjs.remove(var); delete var;
@@ -295,23 +308,37 @@ MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, PyObject* m, tLvVarErr* e
 }
 
 MSEXPORT int PyDictDelete(PyObject* dict) { //  delete Python dictionary object
-    if (!IsPyObj(dict)) return -1;  //  don't want to risk a dump in case of invalid data
-    PyObjObjs.remove(dict); delete dict;
+    if (!IsPyObject(dict)) return -1;  //  don't want to risk a dump in case of invalid data
+    PyObjObjs.remove(dict); Py_DECREF(dict);
     return 0;
 }
 
 MSEXPORT VarObj* PyVarToVarPP(char* name, PyObject* var) {  //  convert Python variable object to Variant++ (C++) object
-    if (!IsPyObj(var)) return NULL;  //  don't want to risk a dump in case of invalid data
+    if (var == NULL) return NULL;  //  don't want to risk a dump in case of invalid data
     VarObj* V = NULL;
     string* type = new string(var->ob_type->tp_name);
-    bool err = false;
+    bool err = false; PyObject* ErrObj = NULL;    //  so we may parse the error later
     if (*type == string("int")){
-        PyObject* ErrObj = NULL;    //  so we may parse the error later
         int32_t val = PyLong_AsLong(var);
         if (val == -1) err = (ErrObj = PyErr_Occurred()) != NULL;
-        if (!err) return (V = new VarObj(string(name), val));
+        if (!err) {V = new VarObj(string(name), val); AddToVarList(V); return V;}
         else {ObjErr.err = true; ObjErr.str = new string("Couldn't convert integer"); return NULL; }
         }
+    if (*type == string("float")){
+        double val = PyFloat_AsDouble(var);
+        if (val == -1) err = (ErrObj = PyErr_Occurred()) != NULL;
+        if (!err) {V = new VarObj(string(name), val); AddToVarList(V); return V; }
+        else {ObjErr.err = true; ObjErr.str = new string("Couldn't convert float"); return NULL; }
+        }
+    if (*type == string("str")) {
+        PyObject *asstring; char* bytearray;
+        asstring = PyByteArray_FromObject(var);
+        bytearray = PyByteArray_AsString(asstring);
+        string* val = &string(bytearray);
+        if (val == NULL) err = (ErrObj = PyErr_Occurred()) != NULL;
+        if (!err) { V = new VarObj(string(name), val); AddToVarList(V); return V; }
+        else { ObjErr.err = true; ObjErr.str = new string("Couldn't convert string"); return NULL; }
+    }
 
 }
 

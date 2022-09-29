@@ -53,7 +53,6 @@ public:
     PyVar(VarObj* d);
     ~PyVar();
 
-
     bool operator<  (const PyVar rhs) const;
     bool operator<= (const PyVar rhs) const;
     bool operator== (const PyVar rhs) const;

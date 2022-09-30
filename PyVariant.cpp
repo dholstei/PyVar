@@ -5,7 +5,7 @@
 // 
 // Desc:    Convert Variant++ objects to Python (numeric or string) objects and back again
 //
-#define		PYVAR_VERSION "PyVariant++-0.0"
+#define		PYVAR_VERSION "PyVariant++-0.1"
 
 //#define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -125,7 +125,8 @@ PyVar::PyVar(VarObj* d) {   //  Python variable object from C++ Variant++
             var = PyFloat_FromDouble((double)get<double>(d->data));
             break;
         case VarIdx::Str:
-            var = PyUnicode_FromString((char*)get<string*>(d->data)->c_str());
+            var = PyByteArray_FromStringAndSize((char*) get<string*>(d->data)->c_str(),
+                                                        get<string*>(d->data)->length());
             break;
         default:
             {errnum = -1; errstr = new string("Unsupported data type"); errdata = new string(*d->name);}
@@ -141,10 +142,8 @@ PyVar::PyVar(VarObj* d) {   //  Python variable object from C++ Variant++
 }
 
 PyVar::~PyVar() {
-    delete errstr;  errstr  = NULL;
-    delete errdata; errdata = NULL;
-    delete name; name = NULL;
-    Py_DECREF(var);
+    DELSTRPTR(errstr); DELSTRPTR(errdata);
+    DELSTRPTR(name); Py_DECREF(var);
 }
 
 bool PyVar::operator<  (const PyVar rhs) const { return addr <  rhs.addr; }
@@ -175,9 +174,9 @@ PyModule::PyModule(char* d) {   //  Python object from C++ Variant++
 }
 
 PyModule::~PyModule() {
-    delete errstr;  errstr = NULL;
-    delete errdata; errdata = NULL;
-    delete name; name = NULL;
+    DELSTRPTR(errstr);
+    DELSTRPTR(errdata);
+    DELSTRPTR(name);
     Py_DECREF(module);
 }
 
@@ -203,7 +202,7 @@ bool IsPyVar(PyVar* addr) //  check for corruption/validity, use <list> to track
         {ObjErr.str = new string("Invalid Python variable (unallocated memory or non-Python object)"); ObjErr.err = true; return false; }
 
     if (addr->addr == addr && addr->canary_end == MAGIC)
-        { ObjErr.err = false; delete ObjErr.str; return true; }
+        { ObjErr.err = false; DELSTRPTR(ObjErr.str); return true; }
     else { ObjErr.err = true; ObjErr.str = new string("Control/monitor memory corrupted"); return false; }
 }
 
@@ -262,7 +261,7 @@ MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Pytho
         tObjErr* VarErr = (tObjErr*) GetObjErr();   //  get error from Variant library
         error->errnum = VarErr->err; VarErr->err = 0;
         if (VarErr->str != NULL)
-            {error->errstr = LVStr(*VarErr->str); delete VarErr->str; VarErr->str = NULL;}
+            {error->errstr = LVStr(*VarErr->str); DELSTRPTR(VarErr->str);}
         return NULL;}
 
     PyVar *pValue =  new PyVar(data);
@@ -330,16 +329,14 @@ MSEXPORT VarObj* PyVarToVarPP(char* name, PyObject* var) {  //  convert Python v
         if (!err) {V = new VarObj(string(name), val); AddToVarList(V); return V; }
         else {ObjErr.err = true; ObjErr.str = new string("Couldn't convert float"); return NULL; }
         }
-    if (*type == string("str")) {
-        PyObject *asstring; char* bytearray;
-        asstring = PyByteArray_FromObject(var);
-        bytearray = PyByteArray_AsString(asstring);
-        string* val = &string(bytearray);
-        if (val == NULL) err = (ErrObj = PyErr_Occurred()) != NULL;
-        if (!err) { V = new VarObj(string(name), val); AddToVarList(V); return V; }
-        else { ObjErr.err = true; ObjErr.str = new string("Couldn't convert string"); return NULL; }
+    if (*type == string("bytearray")) {
+        V = new VarObj(string(name), PyByteArray_AS_STRING(var), PyByteArray_GET_SIZE(var));
+        AddToVarList(V); return V;
     }
-
+    ObjErr.err = true; 
+    ObjErr.str = new string("Unhandled Python object (PyObject*) for conversion.  ");
+    *(ObjErr.str) += string("Type: \"" + *type + "\"");
+    return NULL;
 }
 
 #if 1   //  utility-ish functions
@@ -349,7 +346,7 @@ MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
         if (!ObjErr.err) return; //  no error
         error->errnum = -1;
         error->errstr = LVStr(*ObjErr.str);
-        ObjErr.err = false; delete ObjErr.str; //  Clear error, but race conditions may exist, if so, da shit has hit da fan. 
+        ObjErr.err = false; DELSTRPTR(ObjErr.str);  //  Clear error, but race conditions may exist, if so, da shit has hit da fan. 
     }
     else
     {   //  API error info is stored in object, pass up to caller
@@ -358,8 +355,8 @@ MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
         if (PyVarObj->errstr != NULL) error->errstr = LVStr(*(PyVarObj->errstr));
         else error->errstr = LVStr("Unknown error");
         PyVarObj->errnum = 0;
-        delete PyVarObj->errstr;  PyVarObj->errstr  = NULL;
-        delete PyVarObj->errdata; PyVarObj->errdata = NULL;
+        DELSTRPTR(PyVarObj->errstr);
+        DELSTRPTR(PyVarObj->errdata);
     }
 }
 

@@ -4,8 +4,10 @@
 #include<Windows.h>
 #include <winuser.h>
 #define MSEXPORT __declspec(dllexport)
+#define DELSTRPTR(A) {delete A; A= NULL;}
 #else
 #define MSEXPORT
+#define DELSTRPTR(A) {delete A; A= NULL;}
 #endif // WIN32
 
 #include <list>     //  container of generated objects for error checking (avoid SEGFAULT)

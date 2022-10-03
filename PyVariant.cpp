@@ -17,10 +17,10 @@ using namespace std;
 
 #if 1   //  LabVIEW stuff
 #define LStrString(A) string((char*) (*A)->str, (*A)->cnt)
-LStrHandle LVStr(string str)    //  convert string to new LV string handle
+LStrHandle  LVStr(string str)    //  convert string to new LV string handle
 {
-    if (str.length() == 0) return NULL;
-    LStrHandle l; if ((l = (LStrHandle)DSNewHClr(sizeof(int32) + str.length())) == NULL) return NULL;
+    if (str.length() == 0) return (LStrHandle) DSNewHClr(sizeof(int32));
+    LStrHandle l; if ((l = (LStrHandle) DSNewHClr(sizeof(int32) + str.length())) == NULL) return NULL;
     memmove((char*)(*l)->str, str.c_str(), ((*l)->cnt = str.length()));
     return l;
 }
@@ -277,7 +277,9 @@ MSEXPORT PyVar* PyVarCreate(VarObj* data, tLvVarErr* error) {   //  create Pytho
 
 MSEXPORT PyObject* GetPyObject(PyVar* var) {return var->var;}
 
-MSEXPORT void GetPyVarName(LStrHandle name, PyVar* var)  {LVStr(name, var->name);}
+MSEXPORT void GetPyVarName(LStrHandle *name, PyVar* var) {  //  return PyVar object name to LV str "name"
+    if (var->name == NULL) return;
+    *name = (LStrHandle) LVStr(*var->name);}
 
 MSEXPORT int PyVarDelete(PyVar* var) { //  delete LV Python variable object
     if (!IsPyVar(var)) return -1;  //  don't want to risk a dump in case of invalid data

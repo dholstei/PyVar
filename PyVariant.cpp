@@ -100,7 +100,6 @@ done:
     Py_XDECREF(encoded);
     Py_XDECREF(value);
     PyErr_Clear();
-    MessageBoxA(0, temp_result, "error", 0);
     return result;
 }
 typedef struct {
@@ -223,9 +222,8 @@ extern "C" {  //  functions to be called from LabVIEW.  'extern "C"' is necessar
 MSEXPORT int PyInit() { //  initialize Python interpreter
     if (!Py_IsInitialized())
     {
-        Py_InitializeEx(0);
+        Py_Initialize();
         sys = PyImport_ImportModule("sys");
-        //MainModule = PyImport_ImportModule("__main__");
         if (setup_stderr() == 0) return -1;
     }
     return 0;
@@ -361,6 +359,8 @@ MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
         DELSTRPTR(PyVarObj->errdata);
     }
 }
+
+MSEXPORT void GetPyStdErr(LStrHandle *ErrStr) {*ErrStr = get_stderr_text();}
 
 MSEXPORT void Version(char* buf, int sz) {   //  get version string
     memcpy(buf, string(PYVAR_VERSION).c_str(), min<int>(sz, string(PYVAR_VERSION).length()));}

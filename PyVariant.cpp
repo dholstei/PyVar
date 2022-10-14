@@ -52,6 +52,7 @@ void        LVStr(LStrHandle loc, string* str)    //  convert string to new LV s
 #if 1 // Python stuff
 static PyObject*sys = NULL, *io = NULL, *stringio = NULL, 
                 *stringioinstance = NULL, * MainModule = NULL;
+static string* PyPath = NULL;   //  store python scripts/modules, etc. here
 static bool IsPythonInit = false;
 int setup_stderr() {
     PyObject* io = NULL, * stringio = NULL, * stringioinstance = NULL;
@@ -75,7 +76,6 @@ done:
     Py_XDECREF(io);
     return success;
 }
-
 LStrHandle get_stderr_text() {
     PyObject* pystderr = PySys_GetObject("stderr"); // borrowed reference
 
@@ -102,6 +102,7 @@ done:
     PyErr_Clear();
     return result;
 }
+
 typedef struct {
     int32_t dimSize;
     uint32_t ptrVarObj[1];
@@ -219,12 +220,19 @@ bool IsPyObject(PyObject* addr) //  check for validity, use <list> to track all 
 extern "C" {  //  functions to be called from LabVIEW.  'extern "C"' is necessary to prevent overload name mangling
 
 #define LStrString(A) string((char*) (*A)->str, (*A)->cnt)
-MSEXPORT int PyInit() { //  initialize Python interpreter
+MSEXPORT int PyInit(char* path) { //  initialize Python interpreter
     if (!Py_IsInitialized())
     {
         Py_Initialize();
         sys = PyImport_ImportModule("sys");
         if (setup_stderr() == 0) return -1;
+    }
+    if (path) {
+        if (strnlen(path, 1)) {
+            delete PyPath; PyPath = new string(path);
+            string cmd = string("import sys\nsys.path.append(\"") + *PyPath + string("\")");
+            if (PyRun_SimpleString(cmd.c_str()) != 0) 
+                {ObjErr.err = true; ObjErr.str = new LStrString(get_stderr_text()); return -1;}}
     }
     return 0;
 }
@@ -232,9 +240,8 @@ MSEXPORT int PyInit() { //  initialize Python interpreter
 #define DICT_ERR(e) {error->errnum = -1; error->errstr = LVStr(e); return NULL;}
 MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject* locals, tLvVarErr* error) {  //  run Python program
     PyObject* rtn = NULL; int rc = 0;
-    if (globals != NULL) if (!IsPyObject(globals)) DICT_ERR("bad/invalid global dictionary");
-    if (locals  != NULL) if (!IsPyObject(locals))  DICT_ERR("bad/invalid locals dictionary");
-    //MainModule = PyImport_AddModule("__main__"); Py_INCREF(MainModule);
+    if (globals != NULL) if (!IsPyObject(globals)) DICT_ERR("bad/unmanaged global dictionary");
+    if (locals  != NULL) if (!IsPyObject(locals))  DICT_ERR("bad/unmanaged locals dictionary");
     if (Py_IsInitialized())
         if (globals == NULL && locals == NULL) rc = PyRun_SimpleString(LStrString(cmd).c_str());
         else {rtn = PyRun_String(LStrString(cmd).c_str(), start, globals, locals);}
@@ -248,6 +255,7 @@ MSEXPORT PyObject* PyRun(LStrHandle cmd, int start, PyObject* globals, PyObject*
         if (LStrString(cmd).size() > 0) error->errdata = LVStr(LStrString(cmd));
         if (errstr != NULL) error->errstr = errstr;
         else error->errstr = LVStr("Unknown error");
+        PyErr_Clear();
     }
     return rtn;
 }
@@ -306,6 +314,8 @@ MSEXPORT PyObject* PyDictCreate(PtrArrayHdl PyObjects, PyObject* m, tLvVarErr* e
     return pValue;
 }
 
+MSEXPORT void ManagePyObject(PyObject* obj) {AddToPyObjects(obj);}  //  for LV to add external, managed objects
+
 MSEXPORT int PyDictDelete(PyObject* dict) { //  delete Python dictionary object
     if (!IsPyObject(dict)) return -1;  //  don't want to risk a dump in case of invalid data
     PyObjObjs.remove(dict); Py_DECREF(dict);
@@ -341,6 +351,8 @@ MSEXPORT VarObj* PyVarToVarPP(char* name, PyObject* var) {  //  convert Python v
 
 #if 1   //  utility-ish functions
 
+MSEXPORT void GetPyPath(LStrHandle* path) { *path = LVStr(*PyPath); }   //  user-defined working directory for modules
+
 MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
     if (PyVarObj == NULL || ObjErr.err) { //  NULL object, or error in object creation
         if (!ObjErr.err) return; //  no error
@@ -360,10 +372,9 @@ MSEXPORT void GetError(PyVar* PyVarObj, tLvVarErr* error) { //  get error info
     }
 }
 
-MSEXPORT void GetPyStdErr(LStrHandle *ErrStr) {*ErrStr = get_stderr_text();}
+MSEXPORT void GetPyStdErr(LStrHandle *ErrStr) {*ErrStr = get_stderr_text();}    //  get sys.stderror
 
-MSEXPORT void Version(char* buf, int sz) {   //  get version string
-    memcpy(buf, string(PYVAR_VERSION).c_str(), min<int>(sz, string(PYVAR_VERSION).length()));}
+MSEXPORT void Version(LStrHandle* version) {*version = LVStr(string(PYVAR_VERSION));}   //  get version string
 
 #endif //   end utility-ish functions
 
